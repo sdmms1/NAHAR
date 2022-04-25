@@ -16,8 +16,6 @@ from options import parse_args, get_resume_file, load_warmup_state
 if __name__=='__main__':
 
     # set numpy random seed
-    random.seed(99)
-    np.random.seed(99)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     # parse argument
@@ -26,8 +24,7 @@ if __name__=='__main__':
 
     few_shot_params = dict(n_way = params.n_way, n_support = params.n_shot, n_query = 1)
 
-    for model_name in ["radar", "simulation"]:
-    # for model_name in ["simulation_train_fine_tune"]:
+    for model_name in ["radar"]:
         print("----------------------Model from %s----------------------" % model_name)
         model = GnnNet(model_dict[params.model], **few_shot_params, leakyrelu=params.leakyrelu)
         model = model.cuda()
@@ -35,11 +32,11 @@ if __name__=='__main__':
         model.load_state_dict(state)
         model.eval()
 
-        for support_files in ["radar", "simulation"]:
-            datamgr= SystemDataManager("%s/%s/%s.txt" % (params.data_dir, support_files, "test"),
-                                        "%s/%s/%s.txt" % (params.data_dir, "radar", "test"))
+        for i in range(5, 12):
+            datamgr= SystemDataManager("%s/eval/env5_activity_num/%d_class_eval.txt" % (params.data_dir, i),
+                                       "%s/eval/env5_activity_num/%d_class_eval.txt" % (params.data_dir, i))
             for same_people in [True, False]:
-                print("-------Dataset from %s (%s)-------" % (support_files, "same" if same_people else "different"))
+                print("-------%d classes eval in env5 (%s people)-------" % (i, "same" if same_people else "different"))
                 dataloader = datamgr.get_data_loader(few_shot_params, tep=params.tep, same_people=same_people)
 
                 if params.strategy == 'combination':
@@ -51,5 +48,5 @@ if __name__=='__main__':
                 else:
                     raise NotImplementedError
 
-                print('--- Dataset: %s (%s people) | Acc = %4.2f%% ---' %
-                      (support_files, "same" if same_people else "different", avg_acc * 100))
+                print('--- %d classes eval in env5 (%s people) | Acc = %4.2f%% ---' %
+                      (i, "same" if same_people else "different", avg_acc * 100))

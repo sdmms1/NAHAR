@@ -19,7 +19,7 @@ if __name__=='__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     # parser argument
-    params = parse_args('test')
+    params = parse_args('fs_test')
 
     for model_name in ["simulation"]:
         print("----------------------Model from %s----------------------" % model_name)

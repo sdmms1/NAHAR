@@ -6,7 +6,7 @@ import torch
 import torch.optim
 from torch.utils.tensorboard import SummaryWriter
 
-from data.datamgr import SimpleFewShotDataManager
+from data.datamgr import *
 from methods.backbone import model_dict
 from methods.gnnnet import GnnNet
 from options import parse_args, get_resume_file, load_warmup_state
@@ -17,6 +17,7 @@ if __name__=='__main__':
 
     # set numpy random seed
     np.random.seed(99)
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     # parser argument
     params = parse_args('train')
@@ -36,8 +37,9 @@ if __name__=='__main__':
 
     few_shot_params    = dict(n_way = params.n_way, n_support = params.n_shot, n_query = params.n_query)
 
-    base_datamgr = SimpleFewShotDataManager(os.path.join(params.data_dir, params.trainset, "train.txt"))
-    base_loader = base_datamgr.get_data_loader(few_shot_params, tep = params.tep, group_by_people=False)
+    base_datamgr = TransferMethodDataManager(os.path.join(params.data_dir, params.trainset, "ft_support.txt"),
+                                             os.path.join(params.data_dir, params.trainset, "ft_query.txt"))
+    base_loader = base_datamgr.get_data_loader(few_shot_params, tep = params.tep)
     val_datamgr = SimpleFewShotDataManager(os.path.join(params.data_dir, params.trainset, "val.txt"))
     val_loader = val_datamgr.get_data_loader(few_shot_params, tep=params.tep, group_by_people=False)
 
@@ -66,7 +68,7 @@ if __name__=='__main__':
     tb = SummaryWriter(log_dir=params.tf_dir) if params.tf_dir is not None else None
 
     # get optimizer and checkpoint path
-    optimizer = torch.optim.Adam(model.parameters())
+    optimizer = torch.optim.Adam(model.parameters(), lr=3e-4, weight_decay=1e-3)
 
     # for validation
     max_acc = 0

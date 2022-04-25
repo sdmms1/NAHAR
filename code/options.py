@@ -6,7 +6,7 @@ import argparse
 
 def parse_args(script):
     parser = argparse.ArgumentParser(description= 'few-shot script %s' % script)
-    parser.add_argument('--name'        , default='simulation', type=str, help='')
+    parser.add_argument('--name'        , default='combination_train_transfer_with_mmd_loss_before_gnn', type=str, help='')
 
     parser.add_argument('--model', default='ResNet10', help='model: Conv{4|6} / ResNet{10|18|34}') # we use ResNet10 in the paper
     parser.add_argument('--method', default='gnnnet',   help='baseline/baseline++/protonet/matchingnet/relationnet{_softmax}/gnnnet')
@@ -23,23 +23,27 @@ def parse_args(script):
                         help='The hyper-parameter \lambda_0 for ISDA, select from {1, 2.5, 5, 7.5, 10}. '
                              'We adopt 1 for DenseNets and 7.5 for ResNets and ResNeXts, except for using 5 for ResNet-101.')
     if script == 'train':
-        parser.add_argument('--trainset', default='simulation')
+        parser.add_argument('--trainset', default='radar_fine_tune')
         parser.add_argument('--epochs'   , default=200, type=int, help='number of train epochs')
         parser.add_argument('--tep'   , default=50, type=int, help='number of few shot tasks in each epoch')
         parser.add_argument('--save_freq'   , default=25, type=int, help='Save frequency')
         parser.add_argument('--resume'      , default='', type=str, help='continue from previous trained model with largest epoch')
         parser.add_argument('--resume_epoch', default=-1, type=int, help='')
         parser.add_argument('--warmup'      , default='baseline', type=str, help='continue from baseline, neglected if resume is true')
-    elif script == 'test':
+    elif script == 'fs_test':
         parser.add_argument('--tep'   , default=500, type=int, help='number of few shot tasks in each epoch')
-        parser.add_argument('--split'       , default='base', help='base/val/novel')
         parser.add_argument('--save_epoch', default = -1, type=int,help ='load the model trained in x epoch, use the best model if x is -1')
+    elif script == 'system_eval':
+        parser.add_argument('--tep', default=2000, type=int, help='number of few shot tasks in each epoch')
+        parser.add_argument('--save_epoch', default=-1, type=int,
+                            help='load the model trained in x epoch, use the best model if x is -1')
+        parser.add_argument('--strategy', default='contest', type=str)
     elif script == 'fine_tune':
         parser.add_argument('--tep'   , default=50, type=int, help='number of few shot tasks in each epoch')
-        parser.add_argument('--resume'      , default='simulation_train_by_people', type=str, help='continue from previous trained model with largest epoch')
+        parser.add_argument('--resume'      , default='simulation', type=str, help='continue from previous trained model with largest epoch')
         parser.add_argument('--resume_epoch', default=-1, type=int, help='')
         parser.add_argument('--fine_tune_dataset', default='radar_fine_tune')
-        parser.add_argument('--epochs'   , default=210, type=int, help='number of train epochs')
+        parser.add_argument('--epochs'   , default=220, type=int, help='number of train epochs')
         parser.add_argument('--save_freq'   , default=5, type=int, help='Save frequency')
     else:
         raise ValueError('Unknown script')

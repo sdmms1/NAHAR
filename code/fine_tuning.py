@@ -87,7 +87,7 @@ if __name__=='__main__':
             tb.add_scalar("Test Acc", test_acc, epoch + 1)
             tb.add_scalars("Loss", {"Train": train_loss, "Test": test_loss}, epoch + 1)
 
-        if test_acc > max_acc :
+        if test_acc >= max_acc :
             print("best model! save...")
             max_acc = test_acc
             outfile = os.path.join(params.checkpoint_dir, 'best_model.tar')

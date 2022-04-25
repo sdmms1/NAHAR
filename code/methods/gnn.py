@@ -5,6 +5,65 @@ import torch.nn as nn
 from torch.autograd import Variable
 import torch.nn.functional as F
 from .backbone import Linear_fw, Conv2d_fw, BatchNorm2d_fw, BatchNorm1d_fw
+# from pytorch_adapt.layers.mmd_loss import MMDLoss
+
+class MMDLoss(nn.Module):
+    '''
+    计算源域数据和目标域数据的MMD距离
+    Params:
+    source: 源域数据（n * len(x))
+    target: 目标域数据（m * len(y))
+    kernel_mul:
+    kernel_num: 取不同高斯核的数量
+    fix_sigma: 不同高斯核的sigma值
+    Return:
+    loss: MMD loss
+    '''
+    def __init__(self, kernel_type='rbf', kernel_mul=2.0, kernel_num=5, fix_sigma=None, **kwargs):
+        super(MMDLoss, self).__init__()
+        self.kernel_num = kernel_num
+        self.kernel_mul = kernel_mul
+        self.fix_sigma = None
+        self.kernel_type = kernel_type
+
+    def guassian_kernel(self, source, target, kernel_mul, kernel_num, fix_sigma):
+        n_samples = int(source.size()[0]) + int(target.size()[0])
+        total = torch.cat([source, target], dim=0)
+        total0 = total.unsqueeze(0).expand(
+            int(total.size(0)), int(total.size(0)), int(total.size(1)))
+        total1 = total.unsqueeze(1).expand(
+            int(total.size(0)), int(total.size(0)), int(total.size(1)))
+        L2_distance = ((total0-total1)**2).sum(2)
+        if fix_sigma:
+            bandwidth = fix_sigma
+        else:
+            bandwidth = torch.sum(L2_distance.data) / (n_samples**2-n_samples)
+        bandwidth /= kernel_mul ** (kernel_num // 2)
+        bandwidth_list = [bandwidth * (kernel_mul**i)
+                          for i in range(kernel_num)]
+        kernel_val = [torch.exp(-L2_distance / bandwidth_temp)
+                      for bandwidth_temp in bandwidth_list]
+        return sum(kernel_val)
+
+    def linear_mmd2(self, f_of_X, f_of_Y):
+        loss = 0.0
+        delta = f_of_X.float().mean(0) - f_of_Y.float().mean(0)
+        loss = delta.dot(delta.T)
+        return loss
+
+    def forward(self, source, target):
+        if self.kernel_type == 'linear':
+            return self.linear_mmd2(source, target)
+        elif self.kernel_type == 'rbf':
+            batch_size = int(source.size()[0])
+            kernels = self.guassian_kernel(
+                source, target, kernel_mul=self.kernel_mul, kernel_num=self.kernel_num, fix_sigma=self.fix_sigma)
+            XX = torch.mean(kernels[:batch_size, :batch_size])
+            YY = torch.mean(kernels[batch_size:, batch_size:])
+            XY = torch.mean(kernels[:batch_size, batch_size:])
+            YX = torch.mean(kernels[batch_size:, :batch_size])
+            loss = torch.mean(XX + YY - XY - YX)
+            return loss
 
 def gmul(input):
     W, x = input
@@ -144,9 +203,14 @@ class GNN_nl(nn.Module):
 
         self.w_comp_last = Wcompute(self.input_features + int(self.nf / 2) * self.num_layers, nf, operator='J2', activation='softmax', ratio=[2, 2, 1, 1])
         self.layer_last = Gconv(self.input_features + int(self.nf / 2) * self.num_layers, train_N_way, 2, bn_bool=False)
+        self.kl_div = nn.KLDivLoss(reduction="mean")
+        self.mmd_loss = MMDLoss()
 
     def forward(self, x):
         # x: (15, 12, 128 + 3)
+        support_features = x[0, (0, 1, 2, 4, 5, 6, 8, 9, 10), :-3]
+        query_features = x[:, (3, 7, 11), :-3].contiguous().view(-1, x.shape[-1] - 3)
+
         # W_init: (12, 12) -> (1, 12, 12) -> (15, 12, 12) -> (15, 12, 12, 1)
         W_init = torch.eye(x.size(1), device=x.device).unsqueeze(0).repeat(x.size(0), 1, 1).unsqueeze(3)
 
@@ -155,8 +219,11 @@ class GNN_nl(nn.Module):
 
             x_new = F.leaky_relu(self._modules['layer_l{}'.format(i)]([Wi, x])[1])
             x = torch.cat([x, x_new], 2)
+        # support_features = x[0, (0, 1, 2, 4, 5, 6, 8, 9, 10), :]
+        # query_features = x[:, (3, 7, 11), :].contiguous().view(-1, x.shape[-1])
 
         Wl=self.w_comp_last(x, W_init)
         out = self.layer_last([Wl, x])[1]
 
-        return out
+        return out, self.mmd_loss(support_features, query_features)
+        # return out, None

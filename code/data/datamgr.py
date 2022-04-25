@@ -81,3 +81,15 @@ class SystemDataManager:
         dataset = SystemEvaluationDataset(self.support_files, self.query_files, **fs_param, tep=tep,
                                           transform=self.transform, same_people=same_people)
         return DataLoader(dataset, num_workers=4)
+
+class TransferMethodDataManager:
+    def __init__(self, support_file, query_file):
+        self.support_files = parse_data_file(support_file)
+        self.query_files = parse_data_file(query_file)
+        self.transform = stft_transform
+        assert sorted(list(self.support_files.keys())) == sorted(list(self.query_files.keys()))
+        print(len(self.support_files))
+
+    def get_data_loader(self, fs_param, tep):
+        dataset = TransferMethodDataset(self.support_files, self.query_files, **fs_param, tep=tep, transform=self.transform)
+        return DataLoader(dataset, num_workers=4)

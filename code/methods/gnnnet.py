@@ -1,3 +1,5 @@
+import random
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -26,7 +28,7 @@ class GnnNet(nn.Module):
         self.method = 'GnnNet'
 
         # fix label for training the metric function   1*nw(1 + ns)*nw
-        support_label = torch.from_numpy(np.repeat(range(self.n_way), self.n_support)).unsqueeze(1)
+        support_label = torch.from_numpy(np.repeat(range(self.n_way), self.n_support)).unsqueeze(1).long()
         support_label = torch.zeros(self.n_way*self.n_support, self.n_way).scatter(1, support_label, 1).view(self.n_way, self.n_support, self.n_way)
         support_label = torch.cat([support_label, torch.zeros(self.n_way, 1, n_way)], dim=1)
         self.support_label = support_label.view(1, -1, self.n_way)
@@ -50,17 +52,16 @@ class GnnNet(nn.Module):
         z_stack = [torch.cat([z[:, :self.n_support], z[:, self.n_support + i:self.n_support + i + 1]], dim=1).view(1, -1, z.size(2)) for i in range(self.n_query)]
         assert(z_stack[0].size(1) == self.n_way*(self.n_support + 1))
 
-        scores = self.forward_gnn(z_stack)
-        return scores
+        return self.forward_gnn(z_stack)
 
     def forward_gnn(self, zs):
         # label embedding
         nodes = torch.cat([torch.cat([z, self.support_label], dim=2) for z in zs], dim=0)
-        scores = self.gnn(nodes)
+        scores, mmd_loss = self.gnn(nodes)
 
         # n_q * n_way(n_s + 1) * n_way -> (n_way * n_q) * n_way
         scores = scores.view(self.n_query, self.n_way, self.n_support + 1, self.n_way)[:, :, -1].permute(1, 0, 2).contiguous().view(-1, self.n_way)
-        return scores
+        return scores, mmd_loss
 
     def get_fs_label(self, y):
         assert y.shape[0] == self.n_way, y.shape[1] == self.n_support + self.n_query
@@ -72,6 +73,13 @@ class GnnNet(nn.Module):
         # print(y.shape, y_query.shape)
         return y_query.contiguous().view(-1)
 
+    def query(self, x, largest=True):
+        scores, _ = self.forward(x.cuda())
+
+        topk_scores, topk_labels = torch.topk(scores, 1, 1, largest=largest)
+        topk_idx = topk_labels.cpu().squeeze(1).numpy().tolist()
+        return topk_idx, scores
+
     def train_loop(self, epoch, train_loader, optimizer):
         print_freq = len(train_loader) // 5
         avg_loss=0
@@ -79,8 +87,8 @@ class GnnNet(nn.Module):
             x , y_query = x[0].cuda(), self.get_fs_label(y[0]).cuda()
 
             optimizer.zero_grad()
-            scores = self.forward(x)
-            loss = self.loss_fn(scores, y_query)
+            scores, mmd_loss = self.forward(x)
+            loss = self.loss_fn(scores, y_query) + mmd_loss
             loss.backward()
             optimizer.step()
 
@@ -88,6 +96,7 @@ class GnnNet(nn.Module):
 
             if (i + 1) % print_freq==0:
                 print('Epoch {:d} | Batch {:d}/{:d} | Loss {:f}'.format(epoch, i + 1, len(train_loader), avg_loss/float(i+1)))
+                print("MMD Loss", mmd_loss.item())
 
         return avg_loss / len(train_loader)
 
@@ -96,15 +105,12 @@ class GnnNet(nn.Module):
         acc_all = []
 
         for x, y in test_loader:
-            x, y = x[0], y[0]
+            x, y = x.squeeze(0), y.squeeze(0)
             y_query = self.get_fs_label(y)
 
-            scores = self.forward(x.cuda())
+            choice, scores = self.query(x.cuda())
             loss = self.loss_fn(scores, y_query.cuda())
-
-            topk_scores, topk_labels = torch.topk(scores, 1, 1)
-            topk_inx = topk_labels.cpu().squeeze(1)
-            top1_correct = np.sum((topk_inx == y_query).numpy())
+            top1_correct = np.sum((torch.tensor(choice) == y_query).numpy())
 
             acc_all.append(top1_correct / len(y_query) * 100)
             avg_loss += loss.item()
@@ -116,7 +122,8 @@ class GnnNet(nn.Module):
 
         return avg_loss, acc_mean
 
-    def system_evaluation(self, dataloader):
+    def combination_system_evaluation(self, dataloader):
+        print_freq = len(dataloader) // 5
 
         correct_num = 0
         for i, (X, y) in enumerate(dataloader):
@@ -125,13 +132,8 @@ class GnnNet(nn.Module):
             votes = np.zeros(len(X))
             for combination in combinations(range(len(X)), self.n_way):
                 x = X[combination,]
-                # print(combination, x.shape)
-                scores = self.forward(x.cuda())
-
-                topk_scores, topk_labels = torch.topk(scores, 1, 1)
-                topk_inx = topk_labels.cpu().squeeze(1).numpy().tolist()
-                # print(topk_inx)
-                choice = list(set(topk_inx))
+                choice, scores = self.query(x.cuda())
+                choice = list(set(choice))
                 assert len(choice) == 1
 
                 votes[combination[int(choice[0])]] += 1
@@ -139,8 +141,85 @@ class GnnNet(nn.Module):
             pred = np.argmax(votes)
             if pred == y:
                 correct_num += 1
-            else:
-                print(votes)
+
+            if (i + 1) % print_freq == 0:
+                print("pred: %d, truth: %d, (%d/%d)" % (pred, int(y[0]), correct_num, i + 1))
+
+        return correct_num / len(dataloader)
+
+    def sliding_window_system_evaluation(self, dataloader):
+        print_freq = len(dataloader) // 5
+
+        correct_num = 0
+        for i, (X, y) in enumerate(dataloader):
+            X = X.squeeze(0) # size = total_cls * (n_shot + 1)
+
+            idxs = list(range(len(X)))
+            random.shuffle(idxs)
+            window = idxs[:3]
+            for cls_idx in idxs[3:]:
+                x = X[tuple(window),]
+                choice, scores = self.query(x.cuda(), largest=False)
+                choice = list(set(choice))
+                # print(window, scores, choice)
+                assert len(choice) == 1
+                for e in choice:
+                    window.pop(e)
+                    window.append(cls_idx)
+
+            x = X[tuple(window),]
+            choice, scores = self.query(x.cuda())
+            choice = list(set(choice))
+            assert len(choice) == 1
+
+            pred = window[choice[0]]
+            # print(scores, choice)
+            # print(window, pred, y)
+
+            if pred == y:
+                correct_num += 1
+
+            if (i + 1) % print_freq==0:
+                print("pred: %d, truth: %d, (%d/%d)" % (pred, int(y[0]), correct_num, i + 1))
+
+        return correct_num / len(dataloader)
+
+    def contest_system_evaluation(self, dataloader):
+        print_freq = len(dataloader) // 5
+
+        correct_num = 0
+        for i, (X, y) in enumerate(dataloader):
+            X = X.squeeze(0) # size = total_cls * (n_shot + 1)
+
+            candidates = list(range(len(X)))
+            random.shuffle(candidates)
+            while len(candidates) > 3:
+                window, candidates = candidates[:3], candidates[3:]
+                x = X[tuple(window),]
+                choice, scores = self.query(x.cuda(), largest=False)
+                choice = list(set(choice))
+                # print(window, scores, choice)
+                try:
+                    assert len(choice) == 1
+                except Exception:
+                    print(choice, scores)
+                for e in choice:
+                    window.pop(e)
+                    candidates = candidates + window
+
+            x = X[tuple(candidates),]
+            choice, scores = self.query(x.cuda())
+            choice = list(set(choice))
+            assert len(choice) == 1
+
+            pred = candidates[choice[0]]
+            # print(scores, choice)
+            # print(window, pred, y)
+
+            if pred == y:
+                correct_num += 1
+
+            if (i + 1) % print_freq==0:
                 print("pred: %d, truth: %d, (%d/%d)" % (pred, int(y[0]), correct_num, i + 1))
 
         return correct_num / len(dataloader)

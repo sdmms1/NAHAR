@@ -60,45 +60,6 @@ class SimpleFewShotDataset(Dataset):
     def __len__(self):
         return self.tep
 
-class SingleSampleFewShotDataset(Dataset):
-    """
-     Sample support set and unique query sample
-     n_way * (n_support + query_sample), query_sample is the unique sample in the chosen class
-    """
-
-    def __init__(self, files, n_way, n_support, n_query, tep, transform=None):
-        self.files, self.classes = files, list(files.keys())
-        self.n_way, self.n_support, self.n_query, self.tep = n_way, n_support, n_query, tep
-        assert self.n_way <= len(self.files)
-        self.transform = transform
-
-    def __getitem__(self, i):
-        support_set, query_sample, query_label = [], None, -1
-        for class_idx in torch.randperm(len(self.classes))[:self.n_way]:
-            cls = self.classes[class_idx]
-            files = self.files[cls]
-            files_idx = torch.randperm(len(files))[:self.n_support + self.n_query]
-            support_set += [(files[idx], cls) for idx in files_idx[:self.n_support]]
-            if not query_sample:
-                query_sample, query_label = files[files_idx[self.n_support]], cls
-
-        query_sample = get_img(query_sample, self.transform)
-        x, y = [], []
-        for i in range(self.n_way):
-            x.append([])
-            y.append([])
-            for file, cls in support_set[i * self.n_support: (i + 1) * self.n_support]:
-                x[-1].append(get_img(file, self.transform))
-                y[-1].append(cls)
-            x[-1] += [query_sample]
-            y[-1] += [query_label]
-
-        x, y = np.array(x), np.array(y)
-        return torch.from_numpy(x), torch.from_numpy(y)
-
-    def __len__(self):
-        return self.tep
-
 class FewShotDatasetByPeople(Dataset):
     """
     Sample out data with size n_way * [n_support + n_query], ensuring that support set and
@@ -283,8 +244,6 @@ class SystemEvaluationDataset(Dataset):
                     support_files.pop(fidx % 15) # avoid the query sample appear in the support set
                 else:
                     support_files = self.support_files[y][:pidx * 15] + self.support_files[y][(pidx + 1) * 15:]
-
-                # print(["/".join(e.split("/")[-3:]) for e in support_files])
             else:
                 support_files = self.support_files[cls]
             files_idx = torch.randperm(len(support_files))[:self.n_support]
@@ -294,6 +253,54 @@ class SystemEvaluationDataset(Dataset):
             e.append(query_sample)
 
         return np.array(x), y
+
+    def __len__(self):
+        return self.tep
+
+class TransferMethodDataset(Dataset):
+    """
+    Sample out data with size n_way * [support + query](where support and query is similar in each way)
+    """
+    def __init__(self, support_files, query_files, n_way, n_support, n_query, tep, transform = None):
+        self.support_files, self.query_files, self.classes = support_files, query_files, list(support_files.keys())
+        self.n_way, self.n_support, self.n_query, self.tep = n_way, n_support, n_query, tep
+        assert self.n_way <= len(self.support_files)
+        self.transform = transform
+
+    def __getitem__(self, i):
+        support_set, query_set = [], []
+        p = random.random()
+        for class_idx in torch.randperm(len(self.classes))[:self.n_way]:
+            cls = self.classes[class_idx]
+
+            files = self.support_files[cls]
+            files_idx = torch.randperm(len(files))[:self.n_support]
+            support_set += [(files[idx], cls) for idx in files_idx]
+
+            # if p < 0.1:
+            files = self.query_files[cls]
+            files_idx = torch.randperm(len(files))[:self.n_query]
+            query_set += [(files[idx], cls) for idx in files_idx]
+            # else:
+            #     files = self.support_files[cls]
+            #     files_idx = torch.randperm(len(files))[:self.n_query]
+            #     query_set += [(files[idx], cls) for idx in files_idx]
+
+        random.shuffle(query_set)
+
+        x, y = [], []
+        for i in range(self.n_way):
+            x.append([])
+            y.append([])
+            for file, cls in support_set[i * self.n_support: (i + 1) * self.n_support]:
+                x[-1].append(get_img(file, self.transform))
+                y[-1].append(cls)
+            for file, cls in query_set[i * self.n_query: (i + 1) * self.n_query]:
+                x[-1].append(get_img(file, self.transform))
+                y[-1].append(cls)
+
+        x, y = np.array(x), np.array(y)
+        return torch.from_numpy(x), torch.from_numpy(y)
 
     def __len__(self):
         return self.tep

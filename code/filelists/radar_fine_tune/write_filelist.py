@@ -44,3 +44,8 @@ if __name__ == '__main__':
     with open("./val_query.txt", "w") as file:
         file.write("\n".join(val_query_data))
 
+    with open("./train.txt", "w") as file:
+        file.write("\n".join(ft_query_data))
+    with open("./val.txt", "w") as file:
+        file.write("\n".join(val_query_data))
+
