@@ -3,6 +3,7 @@ import os
 import random
 
 data_dir = "/home/yangmuzhen/NAHAR/data/radar_10s/env1/"
+# data_dir = "E:/ymz/NAHAR/data/radar_10s/env1/"
 
 actions = [action for action in os.listdir(data_dir) if action[0] != "p"]
 seen_actions = ['jm', 'run', 'sit', 'squat', 'walk']
